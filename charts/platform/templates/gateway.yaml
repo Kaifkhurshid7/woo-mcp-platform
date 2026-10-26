@@ -1,5 +1,12 @@
+{{- if eq .Values.mode "platform" }}
 {{- $c := dict "root" . "c" "gateway" }}
 {{- $name := include "platform.cname" $c }}
+{{- $pg := .Values.postgres.enabled }}
+{{- /* SQLite (default) needs one writer on a ReadWriteOnce volume. With Postgres the gateway is stateless and can scale out. */}}
+{{- if and (not $pg) (gt (int .Values.gateway.replicas) 1) }}
+{{- fail "gateway.replicas > 1 requires postgres.enabled=true (SQLite cannot be shared between replicas)" }}
+{{- end }}
+{{- if not $pg }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,6 +22,7 @@ spec:
     requests:
       storage: {{ .Values.gateway.persistence.size }}
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -38,8 +46,14 @@ metadata:
     {{- include "platform.labels" $c | nindent 4 }}
 spec:
   replicas: {{ .Values.gateway.replicas }}
+  {{- if $pg }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  {{- else }}
   strategy:
     type: Recreate          # SQLite on a ReadWriteOnce volume: never two writers during a rollout
+  {{- end }}
   selector:
     matchLabels:
       {{- include "platform.selector" $c | nindent 6 }}
@@ -50,6 +64,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/gateway-configmap.yaml") . | sha256sum }}
     spec:
+      terminationGracePeriodSeconds: 30
       {{- include "platform.pullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
@@ -57,6 +72,15 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
+      {{- if and $pg (gt (int .Values.gateway.replicas) 1) }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "platform.selector" $c | nindent 14 }}
+      {{- end }}
       containers:
         - name: gateway
           image: {{ include "platform.image" (dict "root" . "img" .Values.gateway.image) }}
@@ -73,18 +97,29 @@ spec:
               {{- include "platform.secretRef" (dict "root" . "key" "gateway-encryption-key") | nindent 14 }}
             - name: ADMIN_PASSWORD
               {{- include "platform.secretRef" (dict "root" . "key" "gateway-admin-password") | nindent 14 }}
+            - name: INTERNAL_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "internal-token") | nindent 14 }}
             - name: WOO_MCP_TOKEN
               {{- include "platform.secretRef" (dict "root" . "key" "woo-mcp-token") | nindent 14 }}
             - name: NOTES_MCP_TOKEN
               {{- include "platform.secretRef" (dict "root" . "key" "notes-mcp-token") | nindent 14 }}
             - name: UTILS_MCP_TOKEN
               {{- include "platform.secretRef" (dict "root" . "key" "utils-mcp-token") | nindent 14 }}
+            {{- if $pg }}
+            - name: POSTGRES_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "postgres-password") | nindent 14 }}
+            - name: DATABASE_URL
+              value: postgres://gateway:$(POSTGRES_PASSWORD)@{{ include "platform.cname" (dict "root" . "c" "postgres") }}:5432/gateway
+            {{- end }}
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "platform.secretName" . }}
                   key: llm-api-key
                   optional: true
+          lifecycle:
+            preStop:                # let the Service stop routing to this pod before it exits (no dropped requests on rollout)
+              exec: { command: ["sh", "-c", "sleep 8"] }
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
@@ -94,10 +129,29 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+          {{- if not $pg }}
           volumeMounts:
             - name: data
               mountPath: /data
+          {{- end }}
+      {{- if not $pg }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ $name }}
+      {{- end }}
+{{- if gt (int .Values.gateway.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+{{- end }}
+{{- end }}

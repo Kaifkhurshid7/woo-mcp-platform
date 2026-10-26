@@ -16,9 +16,16 @@ const nowGmt = () => new Date().toISOString().replace(/\.\d+Z$/, '');
 const mkOrder = ({ product, qty = 1, first = 'Test', last = 'Buyer', status = 'processing', date }) => {
   const total = (Number(product.regular_price) * qty).toFixed(2);
   return {
-    id: ++oid, number: String(oid), status, currency: 'INR', total,
-    date_created: date || nowGmt(), date_created_gmt: date || nowGmt(), date_modified_gmt: nowGmt(),
-    payment_method: 'cod', payment_method_title: 'Cash on delivery',
+    id: ++oid,
+    number: String(oid),
+    status,
+    currency: 'INR',
+    total,
+    date_created: date || nowGmt(),
+    date_created_gmt: date || nowGmt(),
+    date_modified_gmt: nowGmt(),
+    payment_method: 'cod',
+    payment_method_title: 'Cash on delivery',
     billing: { first_name: first, last_name: last, email: `${first.toLowerCase()}@example.com` },
     line_items: [{ product_id: product.id, name: product.name, quantity: qty, total }],
   };
@@ -46,8 +53,10 @@ http
 
       if (!url.pathname.startsWith('/wp-json/wc/v3/')) return send(404, { code: 'rest_no_route', message: 'No route' });
       const auth = Buffer.from((req.headers.authorization || '').replace(/^Basic /, ''), 'base64').toString();
-      if (req.headers['x-forwarded-proto'] !== 'https') return send(401, { code: 'woocommerce_rest_cannot_view', message: 'Basic auth needs SSL (mock)' });
-      if (auth !== `${KEY}:${SECRET}`) return send(401, { code: 'woocommerce_rest_authentication_error', message: 'Invalid consumer key or secret' });
+      if (req.headers['x-forwarded-proto'] !== 'https')
+        return send(401, { code: 'woocommerce_rest_cannot_view', message: 'Basic auth needs SSL (mock)' });
+      if (auth !== `${KEY}:${SECRET}`)
+        return send(401, { code: 'woocommerce_rest_authentication_error', message: 'Invalid consumer key or secret' });
 
       const route = url.pathname.replace('/wp-json/wc/v3', '');
       const q = url.searchParams;
@@ -61,7 +70,17 @@ http
       }
       if (route === '/products' && req.method === 'POST') {
         if (!json.name) return send(400, { code: 'rest_missing_callback_param', message: 'Missing parameter(s): name' });
-        const p = { id: ++pid, name: json.name, status: json.status || 'publish', price: json.regular_price, regular_price: json.regular_price, sale_price: '', stock_status: 'instock', permalink: `http://store.test/product/${pid}`, sku: json.sku || '' };
+        const p = {
+          id: ++pid,
+          name: json.name,
+          status: json.status || 'publish',
+          price: json.regular_price,
+          regular_price: json.regular_price,
+          sale_price: '',
+          stock_status: 'instock',
+          permalink: `http://store.test/product/${pid}`,
+          sku: json.sku || '',
+        };
         products.push(p);
         return send(201, p);
       }

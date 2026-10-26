@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hosted-mcp
+description: One MCP server deployed from a container image, with its own Secret, resource limits and NetworkPolicy
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

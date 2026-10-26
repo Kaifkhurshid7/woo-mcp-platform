@@ -17,6 +17,8 @@ kubectl -n "${NAMESPACE}" create secret generic "${SECRET}" \
   --from-literal=notes-mcp-token="$(rnd 20)" \
   --from-literal=utils-mcp-token="$(rnd 20)" \
   --from-literal=gateway-encryption-key="$(rnd 24)" \
+  --from-literal=internal-token="$(rnd 24)" \
+  --from-literal=postgres-password="$(rnd 16)" \
   --from-literal=gateway-admin-password="${ADMIN_PASSWORD:-$(rnd 12)}" \
   --from-literal=llm-api-key="${LLM_API_KEY:-}"
 echo "Secret ${NAMESPACE}/${SECRET} created. Read the admin logins with:"

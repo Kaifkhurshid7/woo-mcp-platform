@@ -1,0 +1,27 @@
+# Installed by the provisioner into its own namespace (one namespace per hosted server).
+name: mcp-server
+image: ""                  # e.g. woo-platform/demo-mcp:dev
+port: 3000
+tokenEnv: MCP_AUTH_TOKEN   # env var that receives a generated bearer token ("" = the server needs no credential)
+env: {}                    # extra environment variables (plain values)
+runAsUser: 1000
+
+global:
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+networkPolicy:
+  enabled: true
+  gatewayNamespace: platform
+
+resources:
+  requests: { cpu: 25m, memory: 64Mi }
+  limits: { cpu: 250m, memory: 256Mi }
+
+quota:
+  requests.cpu: 500m
+  requests.memory: 512Mi
+  limits.cpu: "1"
+  limits.memory: 1Gi
+  pods: "4"
+  persistentvolumeclaims: "0"

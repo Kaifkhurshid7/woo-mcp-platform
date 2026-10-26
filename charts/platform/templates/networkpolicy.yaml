@@ -1,28 +1,32 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- $root := . }}
-{{- $ns := .Values.networkPolicy.ingressControllerNamespace }}
 {{- $inst := .Release.Name }}
+{{- $ingressNs := .Values.networkPolicy.ingressControllerNamespace }}
+{{- $tenant := eq .Values.mode "store" }}
+{{- $fullname := include "platform.fullname" . }}
 {{- /*
-  Deny-by-default for everything in the namespace, then open exactly the paths the platform needs:
-    internet -> ingress controller -> storefront (wordpress), dashboard, gateway
-    gateway -> woo-mcp / notes / utils          (the ONLY way to reach an upstream)
-    woo-mcp -> wordpress -> mariadb
-  Egress is additionally locked down for the upstream servers and the database.
+  Default-deny, then open exactly the paths the platform needs.
+
+  platform mode:  internet -> ingress controller -> storefront, dashboard, gateway
+                  gateway  -> woo-mcp / notes / utils / provisioner       (the ONLY way to reach an upstream)
+                  woo-mcp  -> wordpress -> mariadb;  gateway -> postgres
+  store mode:     the same chain for one tenant store, but the only caller of its woo-mcp is the gateway pod in
+                  the platform namespace. Nothing else can reach this namespace's database or WordPress, and
+                  nothing in it can reach another store: that is the isolation between stores.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-default-deny-ingress
+  name: {{ $fullname }}-default-deny
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
   podSelector: {}
-  policyTypes: [Ingress]
+  policyTypes: [Ingress{{ if $tenant }}, Egress{{ end }}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-allow-from-ingress-controller
+  name: {{ $fullname }}-allow-from-ingress-controller
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -30,7 +34,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [wordpress, gateway, dashboard]
+        values: [wordpress{{ if not $tenant }}, gateway, dashboard{{ end }}]
       - key: app.kubernetes.io/instance
         operator: In
         values: [{{ $inst | quote }}]
@@ -39,12 +43,12 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $ns }}
+              kubernetes.io/metadata.name: {{ $ingressNs }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-gateway-to-upstreams
+  name: {{ $fullname }}-gateway-to-upstreams
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -52,17 +56,26 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [woo-mcp, notes-mcp, utils-mcp]
+        values: [woo-mcp{{ if not $tenant }}, notes-mcp, utils-mcp{{ end }}]
       - key: app.kubernetes.io/instance
         operator: In
         values: [{{ $inst | quote }}]
   policyTypes: [Ingress]
   ingress:
     - from:
+        {{- if $tenant }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+        {{- else }}
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: gateway
               app.kubernetes.io/instance: {{ $inst | quote }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: 3000
@@ -70,7 +83,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-woo-mcp-to-wordpress
+  name: {{ $fullname }}-woo-mcp-to-wordpress
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -92,7 +105,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-wordpress-to-mariadb
+  name: {{ $fullname }}-wordpress-to-mariadb
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -122,7 +135,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-woo-mcp-egress
+  name: {{ $fullname }}-woo-mcp-egress
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -146,11 +159,49 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
+{{- if $tenant }}
+---
+{{- /* WordPress may reach its database, DNS and the public internet, but no private (cluster/other-store) address. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-wordpress-egress
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: wordpress
+      app.kubernetes.io/instance: {{ $inst | quote }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mariadb
+              app.kubernetes.io/instance: {{ $inst | quote }}
+      ports:
+        - { protocol: TCP, port: 3306 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+      ports:
+        - { protocol: TCP, port: 80 }
+        - { protocol: TCP, port: 443 }
+{{- else }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "platform.fullname" . }}-demo-mcp-egress
+  name: {{ $fullname }}-demo-mcp-egress
   labels:
     {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
 spec:
@@ -171,4 +222,73 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
+{{- if .Values.provisioner.enabled }}
+---
+{{- /* Only the gateway may call the provisioner; the provisioner may call the Kubernetes API and the gateway. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-gateway-to-provisioner
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: provisioner
+      app.kubernetes.io/instance: {{ $inst | quote }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+              app.kubernetes.io/instance: {{ $inst | quote }}
+      ports:
+        - { protocol: TCP, port: 3000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-provisioner-to-gateway
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+      app.kubernetes.io/instance: {{ $inst | quote }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: provisioner
+              app.kubernetes.io/instance: {{ $inst | quote }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+{{- end }}
+{{- if .Values.postgres.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-gateway-to-postgres
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "netpol") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/instance: {{ $inst | quote }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+              app.kubernetes.io/instance: {{ $inst | quote }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+{{- end }}
+{{- end }}
 {{- end }}

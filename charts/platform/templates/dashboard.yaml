@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "platform" }}
 {{- $c := dict "root" . "c" "dashboard" }}
 {{- $name := include "platform.cname" $c }}
 apiVersion: v1
@@ -60,3 +61,5 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+
+{{- end }}

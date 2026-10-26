@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "platform" }}
 {{- range $kind := list "notes" "utils" }}
 {{- $cfg := index $.Values.demoServers $kind }}
 {{- if $cfg.enabled }}
@@ -66,4 +67,6 @@ spec:
           resources:
             {{- toYaml $.Values.demoServers.resources | nindent 12 }}
 {{- end }}
+{{- end }}
+
 {{- end }}

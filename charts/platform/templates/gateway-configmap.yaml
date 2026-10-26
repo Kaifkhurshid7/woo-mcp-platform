@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "platform" }}
 {{- $c := dict "root" . "c" "gateway" }}
 {{- $woo := include "platform.cname" (dict "root" . "c" "woo-mcp") }}
 {{- $seed := list (dict "slug" "woo" "name" "WooCommerce store" "url" (printf "http://%s:3000/mcp" $woo) "credentialEnv" "WOO_MCP_TOKEN") }}
@@ -25,8 +26,14 @@ data:
   REFRESH_INTERVAL_MS: {{ .Values.gateway.config.refreshIntervalMs | quote }}
   RATE_LIMIT_PER_MIN: {{ .Values.gateway.config.rateLimitPerMin | quote }}
   ALLOW_PRIVATE_UPSTREAMS: {{ .Values.gateway.config.allowPrivateUpstreams | quote }}
+  OAUTH_ENABLED: {{ .Values.gateway.config.oauth | quote }}
+  CHAT_MAX_DIRECT_TOOLS: {{ .Values.gateway.config.chatMaxDirectTools | quote }}
+  {{- if .Values.provisioner.enabled }}
+  PROVISIONER_URL: http://{{ include "platform.cname" (dict "root" . "c" "provisioner") }}:3000
+  {{- end }}
   LLM_PROVIDER: {{ .Values.llm.provider | quote }}
   LLM_MODEL: {{ .Values.llm.model | quote }}
   LLM_BASE_URL: {{ .Values.llm.baseUrl | quote }}
   CHAT_MAX_STEPS: {{ .Values.llm.maxSteps | quote }}
   SEED_SERVERS: {{ toJson $seed | quote }}
+{{- end }}

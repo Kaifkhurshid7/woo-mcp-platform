@@ -7,6 +7,6 @@ RELEASE="${RELEASE:-shop}"
 NAMESPACE="${NAMESPACE:-platform}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-woo-platform}"
 TAG="${TAG:-dev}"
-IMAGES=(wordpress woo-mcp demo-mcp gateway dashboard)
+IMAGES=(wordpress woo-mcp demo-mcp gateway provisioner dashboard)
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required but not installed" >&2; exit 1; }; }

@@ -6,7 +6,7 @@ need docker
 : "${REGISTRY:?set REGISTRY, e.g. ghcr.io/acme}"
 for img in "${IMAGES[@]}"; do
   ref="${REGISTRY}/${IMAGE_PREFIX}/${img}:${TAG}"
-  docker build -t "${ref}" "${ROOT}/images/${img}"
+  if [ "${img}" = "provisioner" ]; then docker build -f "${ROOT}/services/provisioner/Dockerfile" -t "${ref}" "${ROOT}"; else docker build -t "${ref}" "${ROOT}/services/${img}"; fi
   docker push "${ref}"
 done
 echo "Pushed. Set global.imageRegistry=${REGISTRY} and image tags=${TAG} in values-prod.yaml."

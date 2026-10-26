@@ -19,8 +19,19 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'platform-e2e-'));
 const rand = () => crypto.randomBytes(18).toString('hex');
 const P = { woo: 19101, wooMcp: 19102, notes: 19103, utils: 19104, slow: 19105, gw: 19100 };
-const secrets = { consumerKey: `ck_${rand()}`, consumerSecret: `cs_${rand()}`, wooTok: rand(), notesTok: rand(), utilsTok: rand(), enc: rand(), adminPw: `Adm-${rand()}`, pwA: `pw-${rand()}`, pwB: `pw-${rand()}` };
+const secrets = {
+  consumerKey: `ck_${rand()}`,
+  consumerSecret: `cs_${rand()}`,
+  wooTok: rand(),
+  notesTok: rand(),
+  utilsTok: rand(),
+  enc: rand(),
+  adminPw: `Adm-${rand()}`,
+  pwA: `pw-${rand()}`,
+  pwB: `pw-${rand()}`,
+};
 const procs = [];
+let pgContainer = null;
 let passed = 0;
 const step = (msg) => console.log(`\n== ${msg}`);
 const ok = (msg) => (passed++, console.log(`   ok  ${msg}`));
@@ -54,9 +65,16 @@ function startSlowServer() {
     req.on('end', () => {
       if (req.method !== 'POST') return res.writeHead(405).end();
       const msg = JSON.parse(body || '{}');
-      const reply = (result) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
-      if (msg.method === 'initialize') return reply({ protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'slow', version: '1' } });
-      if (msg.method === 'tools/list') return reply({ tools: [{ name: 'hang', description: 'never returns', inputSchema: { type: 'object', properties: {} } }] });
+      const reply = (result) =>
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
+      if (msg.method === 'initialize')
+        return reply({
+          protocolVersion: msg.params.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: 'slow', version: '1' },
+        });
+      if (msg.method === 'tools/list')
+        return reply({ tools: [{ name: 'hang', description: 'never returns', inputSchema: { type: 'object', properties: {} } }] });
       if (msg.method === 'tools/call') return; // hang forever
       res.writeHead(202).end();
     });
@@ -66,10 +84,18 @@ function startSlowServer() {
 
 const gw = `http://127.0.0.1:${P.gw}`;
 async function api(method, url, body, cookie) {
-  const res = await fetch(`${gw}${url}`, { method, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(`${gw}${url}`, {
+    method,
+    headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
   const text = await res.text();
   let json;
-  try { json = JSON.parse(text); } catch { json = text; }
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = text;
+  }
   return { status: res.status, json, setCookie: res.headers.get('set-cookie') };
 }
 const login = async (email, password) => {
@@ -79,19 +105,58 @@ const login = async (email, password) => {
 };
 async function mcp(key) {
   const client = new Client({ name: 'e2e', version: '1' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(`${gw}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${key}` } } }));
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${gw}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${key}` } } }),
+  );
   return client;
 }
 const text = (r) => r.content.map((c) => c.text).join('\n');
 
-async function main() {
-  step('start fake store, upstream MCP servers and the gateway');
-  start('mock-woo', 'node', [`${root}/tests/mock-woo.mjs`], { PORT: P.woo, WOO_CONSUMER_KEY: secrets.consumerKey, WOO_CONSUMER_SECRET: secrets.consumerSecret });
-  start('woo-mcp', 'node', [`${root}/images/woo-mcp/src/server.js`], {
-    PORT: P.wooMcp, MCP_AUTH_TOKEN: secrets.wooTok, WOO_BASE_URL: `http://127.0.0.1:${P.woo}`, WOO_CONSUMER_KEY: secrets.consumerKey, WOO_CONSUMER_SECRET: secrets.consumerSecret, STORE_TIMEZONE: 'Asia/Calcutta',
+async function startPostgres() {
+  // E2E_POSTGRES=1 runs the whole test against Postgres (the back end used for multi-replica installs).
+  const name = `e2e-pg-${process.pid}`;
+  await new Promise((resolve, reject) => {
+    const p = spawn('docker', [
+      'run',
+      '--rm',
+      '-d',
+      '--name',
+      name,
+      '-e',
+      'POSTGRES_PASSWORD=e2e',
+      '-p',
+      '55432:5432',
+      'postgres:16-alpine',
+    ]);
+    p.on('exit', (c) => (c === 0 ? resolve() : reject(new Error('could not start postgres'))));
   });
-  start('notes', 'node', [`${root}/images/demo-mcp/src/server.js`], { PORT: P.notes, KIND: 'notes', MCP_AUTH_TOKEN: secrets.notesTok });
-  start('utils', 'node', [`${root}/images/demo-mcp/src/server.js`], { PORT: P.utils, KIND: 'utils', MCP_AUTH_TOKEN: secrets.utilsTok });
+  pgContainer = name;
+  for (let i = 0; i < 60; i++) {
+    const ready = await new Promise((r) => spawn('docker', ['exec', name, 'pg_isready', '-U', 'postgres']).on('exit', (c) => r(c === 0)));
+    if (ready) return 'postgres://postgres:e2e@127.0.0.1:55432/postgres';
+    await sleep(500);
+  }
+  throw new Error('postgres did not become ready');
+}
+
+async function main() {
+  const databaseUrl = process.env.E2E_POSTGRES ? await startPostgres() : '';
+  step('start fake store, upstream MCP servers and the gateway');
+  start('mock-woo', 'node', [`${root}/tests/mock-woo.mjs`], {
+    PORT: P.woo,
+    WOO_CONSUMER_KEY: secrets.consumerKey,
+    WOO_CONSUMER_SECRET: secrets.consumerSecret,
+  });
+  start('woo-mcp', 'node', [`${root}/services/woo-mcp/src/server.js`], {
+    PORT: P.wooMcp,
+    MCP_AUTH_TOKEN: secrets.wooTok,
+    WOO_BASE_URL: `http://127.0.0.1:${P.woo}`,
+    WOO_CONSUMER_KEY: secrets.consumerKey,
+    WOO_CONSUMER_SECRET: secrets.consumerSecret,
+    STORE_TIMEZONE: 'Asia/Calcutta',
+  });
+  start('notes', 'node', [`${root}/services/demo-mcp/src/server.js`], { PORT: P.notes, KIND: 'notes', MCP_AUTH_TOKEN: secrets.notesTok });
+  start('utils', 'node', [`${root}/services/demo-mcp/src/server.js`], { PORT: P.utils, KIND: 'utils', MCP_AUTH_TOKEN: secrets.utilsTok });
   const slow = await startSlowServer();
   const dbPath = path.join(tmp, 'gateway.db');
   const seed = JSON.stringify([
@@ -99,10 +164,23 @@ async function main() {
     { slug: 'notes', name: 'Team notes', url: `http://127.0.0.1:${P.notes}/mcp`, credentialEnv: 'T_NOTES' },
     { slug: 'utils', name: 'Utilities', url: `http://127.0.0.1:${P.utils}/mcp`, credentialEnv: 'T_UTILS' },
   ]);
-  start('gateway', 'node', [`${root}/images/gateway/src/index.js`], {
-    PORT: P.gw, DB_PATH: dbPath, ENCRYPTION_KEY: secrets.enc, ADMIN_EMAIL: 'admin@example.com', ADMIN_PASSWORD: secrets.adminPw, SEED_SERVERS: seed,
-    T_WOO: secrets.wooTok, T_NOTES: secrets.notesTok, T_UTILS: secrets.utilsTok,
-    LLM_PROVIDER: 'mock', REFRESH_INTERVAL_MS: '1000', LIST_TIMEOUT_MS: '1500', CALL_TIMEOUT_MS: '2000', ALLOW_LOOPBACK_UPSTREAMS: 'true', NODE_NO_WARNINGS: '1',
+  start('gateway', 'node', [`${root}/services/gateway/src/index.js`], {
+    PORT: P.gw,
+    DB_PATH: dbPath,
+    DATABASE_URL: databaseUrl,
+    ENCRYPTION_KEY: secrets.enc,
+    ADMIN_EMAIL: 'admin@example.com',
+    ADMIN_PASSWORD: secrets.adminPw,
+    SEED_SERVERS: seed,
+    T_WOO: secrets.wooTok,
+    T_NOTES: secrets.notesTok,
+    T_UTILS: secrets.utilsTok,
+    LLM_PROVIDER: 'mock',
+    REFRESH_INTERVAL_MS: '1000',
+    LIST_TIMEOUT_MS: '1500',
+    CALL_TIMEOUT_MS: '2000',
+    ALLOW_LOOPBACK_UPSTREAMS: 'true',
+    NODE_NO_WARNINGS: '1',
   });
   await waitHttp(`http://127.0.0.1:${P.gw}/readyz`);
   ok('gateway is ready');
@@ -115,12 +193,18 @@ async function main() {
     if (servers.length === 3 && servers.every((s) => s.status === 'connected')) break;
     await sleep(250);
   }
-  assert.deepEqual(servers.map((s) => s.slug), ['woo', 'notes', 'utils']);
+  assert.deepEqual(
+    servers.map((s) => s.slug),
+    ['woo', 'notes', 'utils'],
+  );
   assert.ok(servers.every((s) => s.status === 'connected'));
   assert.ok(servers[0].tools.map((t) => t.name).includes('create_product'));
   assert.ok(servers[0].tools.length >= 5);
   ok(`woo registered first with ${servers[0].tools.length} tools; notes and utils connected`);
-  assert.ok(servers.every((s) => s.hasCredential), 'credentials are stored');
+  assert.ok(
+    servers.every((s) => s.hasCredential),
+    'credentials are stored',
+  );
 
   step('admin: invite two members, they accept and create their own keys');
   const inviteA = (await api('POST', '/api/users', { email: 'a@example.com', name: 'User A', role: 'member' }, adminCookie)).json;
@@ -129,7 +213,11 @@ async function main() {
   const accA = await api('POST', '/api/auth/accept-invite', { token: inviteA.inviteToken, password: secrets.pwA, name: 'User A' });
   const accB = await api('POST', '/api/auth/accept-invite', { token: inviteB.inviteToken, password: secrets.pwB, name: 'User B' });
   assert.equal(accA.status, 200);
-  assert.equal((await api('POST', '/api/auth/accept-invite', { token: inviteA.inviteToken, password: secrets.pwA })).status, 404, 'invite is single-use');
+  assert.equal(
+    (await api('POST', '/api/auth/accept-invite', { token: inviteA.inviteToken, password: secrets.pwA })).status,
+    404,
+    'invite is single-use',
+  );
   const cookieA = accA.setCookie.split(';')[0];
   const cookieB = accB.setCookie.split(';')[0];
   const keyA = (await api('POST', '/api/keys', { name: 'laptop' }, cookieA)).json;
@@ -143,17 +231,23 @@ async function main() {
   assert.equal((await api('POST', '/api/servers', { name: 'x', url: 'http://10.0.0.1/mcp' }, cookieA)).status, 403);
   assert.equal((await api('GET', '/api/users', null, cookieA)).status, 403);
   const memberView = JSON.stringify((await api('GET', '/api/servers', null, cookieA)).json);
-  for (const t of [secrets.wooTok, secrets.notesTok, secrets.utilsTok, '127.0.0.1']) assert.ok(!memberView.includes(t), `member view leaks ${t}`);
+  for (const t of [secrets.wooTok, secrets.notesTok, secrets.utilsTok, '127.0.0.1'])
+    assert.ok(!memberView.includes(t), `member view leaks ${t}`);
   const adminView = JSON.stringify((await api('GET', '/api/servers', null, adminCookie)).json);
   for (const t of [secrets.wooTok, secrets.notesTok, secrets.utilsTok]) assert.ok(!adminView.includes(t), 'admin API leaks a credential');
   ok('no credential is ever returned by the API');
 
-  step('chat agent as user A: create a product, then ask about today\'s orders');
+  step("chat agent as user A: create a product, then ask about today's orders");
   let r = await api('POST', '/api/chat', { message: 'Please create product named Coffee Mug priced 12.50' }, cookieA);
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.equal(r.json.toolCalls[0].name, 'woo__create_product');
   assert.ok(!r.json.toolCalls[0].isError, r.json.toolCalls[0].output);
-  const prod = (await (await fetch(`http://127.0.0.1:${P.woo}/__test/order`, { method: 'POST', body: JSON.stringify({ qty: 2, first: 'Asha', last: 'Verma' }) })).json());
+  const prod = await (
+    await fetch(`http://127.0.0.1:${P.woo}/__test/order`, {
+      method: 'POST',
+      body: JSON.stringify({ qty: 2, first: 'Asha', last: 'Verma' }),
+    })
+  ).json();
   ok(`product created through the chat agent; shopper order #${prod.id} placed on the "storefront"`);
   r = await api('POST', '/api/chat', { message: 'What orders came in today?' }, cookieA);
   assert.equal(r.json.toolCalls[0].name, 'woo__list_orders');
@@ -164,7 +258,17 @@ async function main() {
   step('external MCP client as user B: sees all tools, asks the same question, uses two servers');
   const b = await mcp(keyB.key);
   const names = (await b.listTools()).tools.map((t) => t.name);
-  for (const n of ['woo__list_products', 'woo__create_product', 'woo__list_orders', 'woo__get_order', 'woo__update_order_status', 'notes__ping', 'utils__ping', 'utils__calculate']) assert.ok(names.includes(n), `missing ${n}`);
+  for (const n of [
+    'woo__list_products',
+    'woo__create_product',
+    'woo__list_orders',
+    'woo__get_order',
+    'woo__update_order_status',
+    'notes__ping',
+    'utils__ping',
+    'utils__calculate',
+  ])
+    assert.ok(names.includes(n), `missing ${n}`);
   assert.equal(new Set(names).size, names.length);
   ok(`${names.length} tools listed; same-named "ping" tools are notes__ping and utils__ping`);
   const orders = JSON.parse(text(await b.callTool({ name: 'woo__list_orders', arguments: { date: 'today' } })));
@@ -173,7 +277,10 @@ async function main() {
   const price = JSON.parse(text(await b.callTool({ name: 'woo__list_products', arguments: { search: 'Coffee' } }))).products[0].price;
   const gst = JSON.parse(text(await b.callTool({ name: 'utils__calculate', arguments: { expression: `${price} * 1.18` } })));
   assert.equal(gst.result, 14.75);
-  const note = await b.callTool({ name: 'notes__add_note', arguments: { title: 'Coffee Mug price', body: `${price} + 18% GST = ${gst.result}` } });
+  const note = await b.callTool({
+    name: 'notes__add_note',
+    arguments: { title: 'Coffee Mug price', body: `${price} + 18% GST = ${gst.result}` },
+  });
   assert.ok(!note.isError);
   ok('one workflow used woo + utils + notes (three upstream servers)');
   const upd = JSON.parse(text(await b.callTool({ name: 'woo__update_order_status', arguments: { id: prod.id, status: 'completed' } })));
@@ -184,11 +291,15 @@ async function main() {
   ok('tool errors from the store are passed through clearly');
   await b.close();
 
-  step('revoke user B\'s key: next call is rejected');
+  step("revoke user B's key: next call is rejected");
   const keyBRecord = (await api('GET', '/api/keys?all=1', null, adminCookie)).json.keys.find((k) => k.owner === 'b@example.com');
   assert.equal((await api('DELETE', `/api/keys/${keyBRecord.id}`, null, adminCookie)).status, 200);
   await assert.rejects(() => mcp(keyB.key), /401|revoked|Unauthorized|HTTP/i);
-  const rawRejected = await fetch(`${gw}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', Authorization: `Bearer ${keyB.key}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+  const rawRejected = await fetch(`${gw}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', Authorization: `Bearer ${keyB.key}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
   assert.equal(rawRejected.status, 401);
   assert.equal((await rawRejected.json()).error.message, 'This API key has been revoked.');
   ok('HTTP 401 for the revoked key');
@@ -244,28 +355,166 @@ async function main() {
   ok(`notes is "${notesView.status}" (${notesView.error}); woo and utils unaffected`);
   await c.close();
 
+  step('many tools: /mcp/search exposes three meta-tools; the real call is still routed, permissioned and audited');
+  const keyB3 = (await api('POST', '/api/keys', { name: 'search-client', userId: accB.json.user.id }, adminCookie)).json.key;
+  const sc = new Client({ name: 'e2e-search', version: '1' });
+  await sc.connect(
+    new StreamableHTTPClientTransport(new URL(`${gw}/mcp/search`), { requestInit: { headers: { Authorization: `Bearer ${keyB3}` } } }),
+  );
+  const metaNames = (await sc.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual(metaNames, ['call_tool', 'describe_tool', 'search_tools']);
+  const found = JSON.parse(text(await sc.callTool({ name: 'search_tools', arguments: { query: 'list orders' } })));
+  assert.equal(found.results[0].name, 'woo__list_orders', 'best match first');
+  const described = JSON.parse(text(await sc.callTool({ name: 'describe_tool', arguments: { name: 'woo__list_orders' } })));
+  assert.ok(described.inputSchema, 'schema is returned on demand');
+  const viaSearch = await sc.callTool({ name: 'call_tool', arguments: { name: 'woo__list_orders', arguments: {} } });
+  assert.ok(!viaSearch.isError);
+  const denied = await sc.callTool({ name: 'call_tool', arguments: { name: 'woo__create_product', arguments: { name: 'x', price: '1' } } });
+  assert.equal(denied.isError, true, 'members cannot create products through search/execute either');
+  await sc.close();
+  ok('search_tools finds woo__list_orders first; call_tool executes it and respects permissions');
+
+  step('OAuth (MCP authorization spec): discovery, dynamic registration, PKCE browser login, refresh rotation, revoke');
+  const rpc = (token) =>
+    fetch(`${gw}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+  const unauth = await rpc();
+  assert.equal(unauth.status, 401);
+  assert.match(unauth.headers.get('www-authenticate'), /resource_metadata="[^"]*oauth-protected-resource"/);
+  const prm = await (await fetch(`${gw}/.well-known/oauth-protected-resource`)).json();
+  const asm = await (await fetch(`${prm.authorization_servers[0]}/.well-known/oauth-authorization-server`)).json();
+  assert.deepEqual(asm.code_challenge_methods_supported, ['S256']);
+  const post = (url, body, form) =>
+    fetch(url, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json' },
+      body: form ? new URLSearchParams(body).toString() : JSON.stringify(body),
+    });
+  const redirectUri = 'http://127.0.0.1:8765/callback';
+  assert.equal(
+    (await post(asm.registration_endpoint, { client_name: 'evil', redirect_uris: ['javascript:alert(1)'] })).status,
+    400,
+    'dangerous redirect URI refused',
+  );
+  const reg = await post(asm.registration_endpoint, { client_name: 'e2e client', redirect_uris: [redirectUri] });
+  assert.equal(reg.status, 201);
+  const { client_id: clientId } = await reg.json();
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const authParams = {
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state: 'xyz',
+  };
+  const loginPage = await fetch(`${asm.authorization_endpoint}?${new URLSearchParams(authParams)}`);
+  assert.equal(loginPage.status, 200);
+  assert.match(await loginPage.text(), /Sign in &amp; allow/);
+  const badLogin = await post(
+    asm.authorization_endpoint,
+    { ...authParams, decision: 'allow', email: 'a@example.com', password: 'wrong-password' },
+    true,
+  );
+  assert.equal(badLogin.status, 401);
+  const getCode = async () => {
+    const r = await post(
+      asm.authorization_endpoint,
+      { ...authParams, decision: 'allow', email: 'a@example.com', password: secrets.pwA },
+      true,
+    );
+    assert.equal(r.status, 302);
+    const loc = new URL(r.headers.get('location'));
+    assert.equal(loc.searchParams.get('state'), 'xyz');
+    return loc.searchParams.get('code');
+  };
+  const wrongVerifier = await post(
+    asm.token_endpoint,
+    {
+      grant_type: 'authorization_code',
+      code: await getCode(),
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_verifier: 'not-the-verifier',
+    },
+    true,
+  );
+  assert.equal(wrongVerifier.status, 400, 'PKCE verifier is enforced');
+  const exchange = {
+    grant_type: 'authorization_code',
+    code: await getCode(),
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_verifier: verifier,
+  };
+  const tok = await (await post(asm.token_endpoint, exchange, true)).json();
+  assert.match(tok.access_token, /^gwo_/);
+  assert.equal((await post(asm.token_endpoint, exchange, true)).status, 400, 'authorization codes are single-use');
+  const oc = await mcp(tok.access_token);
+  assert.ok((await oc.listTools()).tools.some((t) => t.name === 'woo__list_orders'));
+  assert.ok(!(await oc.callTool({ name: 'woo__list_orders', arguments: {} })).isError);
+  await oc.close();
+  const refreshed = await (
+    await post(asm.token_endpoint, { grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId }, true)
+  ).json();
+  assert.match(refreshed.access_token, /^gwo_/);
+  assert.equal(
+    (await post(asm.token_endpoint, { grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId }, true)).status,
+    400,
+    'old refresh token is rotated out',
+  );
+  assert.equal((await api('GET', '/api/oauth/grants', null, cookieA)).json.grants.length, 1);
+  assert.equal((await api('DELETE', `/api/oauth/grants/${clientId}`, null, cookieA)).status, 200);
+  assert.equal((await rpc(refreshed.access_token)).status, 401, 'revoking the grant kills its tokens');
+  ok('browser-style PKCE login works; codes are single-use; refresh rotates; revoking the connection ends access');
+
   step('audit log: every call is there, attributed to the right user');
   const audit = (await api('GET', '/api/audit?limit=500', null, adminCookie)).json.entries;
   const by = (u, f) => audit.filter((e) => e.user === u && f(e));
   assert.ok(by('a@example.com', (e) => e.source === 'chat' && e.tool === 'create_product' && e.outcome === 'success').length === 1);
   assert.ok(by('a@example.com', (e) => e.source === 'chat' && e.tool === 'list_orders').length === 1);
-  assert.ok(by('b@example.com', (e) => e.source === 'mcp' && e.server === 'woo' && e.tool === 'list_orders' && e.outcome === 'success' && e.durationMs >= 0).length >= 1);
+  assert.ok(
+    by(
+      'b@example.com',
+      (e) => e.source === 'mcp' && e.server === 'woo' && e.tool === 'list_orders' && e.outcome === 'success' && e.durationMs >= 0,
+    ).length >= 1,
+  );
   assert.ok(by('b@example.com', (e) => e.tool === '(authentication)' && e.outcome === 'rejected' && /revoked/.test(e.error)).length >= 1);
   assert.ok(by('b@example.com', (e) => e.server === 'slowpoke' && e.outcome === 'timeout').length === 1);
   assert.ok(by('b@example.com', (e) => e.server === 'notes' && e.outcome === 'unreachable').length === 1);
   assert.ok(by('b@example.com', (e) => e.server === 'woo' && e.tool === 'get_order' && e.outcome === 'error').length === 1);
-  assert.ok(audit.every((e) => e.user !== 'admin@example.com' || e.source), 'admin entries have a source');
+  assert.ok(
+    audit.every((e) => e.user !== 'admin@example.com' || e.source),
+    'admin entries have a source',
+  );
   const own = (await api('GET', '/api/audit', null, cookieA)).json.entries;
   assert.ok(own.length > 0 && own.every((e) => e.user === 'a@example.com'), 'members only see their own entries');
   ok(`${audit.length} audit entries; chat calls attributed to A, MCP calls to B, revoked key and timeout recorded`);
 
   step('security: SSRF guard, secrets at rest, metrics');
-  for (const url of ['http://169.254.169.254/latest/meta-data', 'http://metadata.google.internal/', 'file:///etc/passwd', 'http://user:pw@example.com/mcp']) {
+  for (const url of [
+    'http://169.254.169.254/latest/meta-data',
+    'http://metadata.google.internal/',
+    'file:///etc/passwd',
+    'http://user:pw@example.com/mcp',
+  ]) {
     const res = await api('POST', '/api/servers', { name: 'evil', url }, adminCookie);
     assert.equal(res.status, 400, `${url} should be rejected`);
   }
-  const dbBytes = fs.readFileSync(dbPath);
-  for (const t of [secrets.wooTok, secrets.notesTok, secrets.utilsTok, keyA.key, secrets.pwA]) assert.ok(!dbBytes.includes(t), 'a secret is stored in plaintext in the database');
+  if (!databaseUrl) {
+    const dbBytes = fs.readFileSync(dbPath);
+    for (const t of [secrets.wooTok, secrets.notesTok, secrets.utilsTok, keyA.key, secrets.pwA])
+      assert.ok(!dbBytes.includes(t), 'a secret is stored in plaintext in the database');
+  }
   ok('metadata/file URLs rejected; no token, key or password is stored in plaintext');
   const metrics = await (await fetch(`${gw}/metrics`)).text();
   assert.match(metrics, /gateway_tool_calls_total\{server="woo",outcome="success",source="mcp"\}/);
@@ -284,6 +533,11 @@ main()
   })
   .finally(() => {
     for (const p of procs) p.kill('SIGKILL');
-    fs.rmSync(tmp, { recursive: true, force: true });
+    if (pgContainer) spawn('docker', ['rm', '-f', pgContainer], { stdio: 'ignore' });
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* Windows may still hold the SQLite file for a moment; the OS temp dir is cleaned up later */
+    }
     setTimeout(() => process.exit(process.exitCode || 0), 200);
   });

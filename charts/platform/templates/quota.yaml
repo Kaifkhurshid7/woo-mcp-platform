@@ -1,0 +1,28 @@
+{{- if eq .Values.mode "store" }}
+{{- /*
+  Guardrails for one tenant store: a ResourceQuota caps what the namespace can consume in total, and a
+  LimitRange gives every container sensible defaults so a missing limit can never be unbounded.
+*/}}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "platform.fullname" . }}-quota
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "quota") | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.store.quota | nindent 4 }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "platform.fullname" . }}-limits
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "quota") | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default: { cpu: 250m, memory: 256Mi }
+      defaultRequest: { cpu: 25m, memory: 64Mi }
+      max: { cpu: "2", memory: 1536Mi }
+{{- end }}

@@ -1,0 +1,9 @@
+{
+  "name": "mcp-provisioner",
+  "version": "1.0.0",
+  "description": "Creates and deletes WooCommerce stores and hosted MCP servers in Kubernetes with Helm, and registers them with the gateway",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js", "test": "node --test test/*.test.js" },
+  "engines": { "node": ">=22" }
+}

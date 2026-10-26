@@ -1,0 +1,160 @@
+{{- if and (eq .Values.mode "platform") .Values.provisioner.enabled }}
+{{- /*
+  The provisioner is the ONLY component with Kubernetes API access. It creates one namespace per store (and per
+  hosted MCP server), installs the chart into it with Helm, and registers the result with the gateway.
+  Its permissions are a ClusterRole limited to the resource kinds those charts contain; it cannot create RBAC
+  objects, run pods exec, or read nodes.
+*/}}
+{{- $c := dict "root" . "c" "provisioner" }}
+{{- $name := include "platform.cname" $c }}
+{{- $p := .Values.provisioner }}
+{{- $storeValues := dict
+      "global" (dict "imageRegistry" .Values.global.imageRegistry "imagePullPolicy" .Values.global.imagePullPolicy "imagePullSecrets" .Values.global.imagePullSecrets "storageClass" .Values.global.storageClass)
+      "ingress" (dict "className" .Values.ingress.className "annotations" .Values.ingress.annotations "tls" (dict "enabled" .Values.ingress.tls.enabled "clusterIssuer" .Values.ingress.tls.clusterIssuer))
+      "store" (merge (dict "image" .Values.store.image "timezone" .Values.store.timezone "currency" .Values.store.currency "country" .Values.store.country "adminEmail" .Values.store.adminEmail) $p.store)
+      "mariadb" (dict "image" .Values.mariadb.image "persistence" $p.mariadb.persistence "resources" $p.mariadb.resources)
+      "wooMcp" (dict "image" .Values.wooMcp.image "resources" .Values.wooMcp.resources)
+      "networkPolicy" (dict "enabled" .Values.networkPolicy.enabled "ingressControllerNamespace" .Values.networkPolicy.ingressControllerNamespace "gatewayNamespace" .Release.Namespace) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, persistentvolumeclaims, resourcequotas, limitranges]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  replicas: 1            # one reconciler: stores are tracked in namespace annotations, so a restart resumes cleanly
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- include "platform.pullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: provisioner
+          image: {{ include "platform.image" (dict "root" . "img" $p.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- include "platform.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: INTERNAL_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "internal-token") | nindent 14 }}
+            - name: GATEWAY_URL
+              value: http://{{ include "platform.cname" (dict "root" . "c" "gateway") }}:8080
+            - name: PLATFORM_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: STORE_DOMAIN_SUFFIX
+              value: {{ $p.storeDomainSuffix | quote }}
+            - name: STORE_SCHEME
+              value: {{ .Values.domain.scheme | quote }}
+            - name: STORE_PORT
+              value: {{ .Values.domain.port | quote }}
+            - name: MAX_STORES_PER_USER
+              value: {{ $p.maxStoresPerUser | quote }}
+            - name: MAX_STORES_TOTAL
+              value: {{ $p.maxStoresTotal | quote }}
+            - name: PROVISION_TIMEOUT_SEC
+              value: {{ $p.provisionTimeoutSec | quote }}
+            - name: HOSTED_ALLOWED_REGISTRIES
+              value: {{ join "," $p.hosted.allowedRegistries | quote }}
+            - name: HOSTED_MAX_SERVERS
+              value: {{ $p.hosted.maxServers | quote }}
+            - name: STORE_VALUES
+              value: {{ toJson $storeValues | quote }}
+            - name: HOSTED_VALUES
+              value: {{ toJson (dict "global" (dict "imagePullPolicy" .Values.global.imagePullPolicy "imagePullSecrets" .Values.global.imagePullSecrets) "networkPolicy" (dict "enabled" .Values.networkPolicy.enabled "gatewayNamespace" .Release.Namespace)) | quote }}
+            - name: HOME
+              value: /tmp/home
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $p.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

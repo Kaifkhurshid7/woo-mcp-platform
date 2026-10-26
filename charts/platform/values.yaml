@@ -1,6 +1,11 @@
 # Defaults describe a LOCAL k3d/kind setup. Production differences live in values-prod.yaml.
 # Nothing secret belongs in this file: see the `secrets` section.
 
+# "platform" installs everything (gateway, dashboard, demo servers, provisioner, primary store).
+# "store" installs ONE tenant store (WordPress, MariaDB, woo-mcp, ingress, quota, isolation policies).
+# The provisioner uses mode=store to create the stores users request from the dashboard; do not set it by hand.
+mode: platform
+
 global:
   imageRegistry: ""            # prefix for the images this repo builds, e.g. ghcr.io/acme ("" = local images)
   imagePullPolicy: IfNotPresent
@@ -33,6 +38,7 @@ secrets:
   mariadbRootPassword: ""
   mariadbPassword: ""
   wpAdminPassword: ""
+  postgresPassword: ""             # used when postgres.enabled
   llmApiKey: ""                    # pass with --set secrets.llmApiKey=... (never commit)
 
 store:
@@ -47,6 +53,17 @@ store:
   resources:
     requests: { cpu: 150m, memory: 384Mi }
     limits: { cpu: "1", memory: 1Gi }
+  # Namespace guardrails applied to every tenant store created from the dashboard (mode=store).
+  quota:
+    requests.cpu: "1"
+    requests.memory: 1536Mi
+    limits.cpu: "3"
+    limits.memory: 3Gi
+    persistentvolumeclaims: "4"
+    requests.storage: 12Gi
+    pods: "12"
+    services: "8"
+    secrets: "20"
 
 mariadb:
   image: { repository: mariadb, tag: "11.4" }
@@ -73,7 +90,7 @@ demoServers:
 
 gateway:
   image: { repository: woo-platform/gateway, tag: dev }
-  replicas: 1                      # SQLite on a ReadWriteOnce volume: keep at 1 (see docs/ARCHITECTURE.md)
+  replicas: 1                      # > 1 needs postgres.enabled=true (SQLite cannot be shared between replicas)
   persistence: { size: 1Gi }
   config:
     callTimeoutMs: 30000
@@ -81,6 +98,8 @@ gateway:
     refreshIntervalMs: 10000
     rateLimitPerMin: 120
     allowPrivateUpstreams: true    # cluster-internal upstreams live on private IPs; metadata/loopback are always blocked
+    oauth: true                    # OAuth 2.1 login for MCP clients (browser flow) next to API keys
+    chatMaxDirectTools: 40         # above this many visible tools the chat agent uses search/describe/call instead
   resources:
     requests: { cpu: 50m, memory: 96Mi }
     limits: { cpu: 500m, memory: 384Mi }
@@ -101,5 +120,42 @@ llm:
   maxSteps: 8
 
 networkPolicy:
-  enabled: true                    # needs a CNI that enforces policies (k3s/k3d do; kind's default does not)
+  enabled: true
+  gatewayNamespace: platform       # tenant stores admit their MCP server only from the gateway pod in this namespace (set automatically)                    # needs a CNI that enforces policies (k3s/k3d do; kind's default does not)
   ingressControllerNamespace: kube-system   # where Traefik runs on k3s; "ingress-nginx" for ingress-nginx
+
+# Shared database for the gateway. Required for gateway.replicas > 1 (users, keys, sessions, servers and the audit
+# log must be shared). Off by default: a single replica uses SQLite on a volume.
+postgres:
+  enabled: false
+  image: { repository: postgres, tag: 16-alpine }
+  persistence: { size: 2Gi }
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+
+# Multi-store provisioning and hosted MCP servers. The provisioner is the only component with Kubernetes API access.
+provisioner:
+  enabled: true
+  image: { repository: woo-platform/provisioner, tag: dev }
+  storeDomainSuffix: stores.localtest.me   # each store gets <slug>.<suffix>; use a wildcard DNS record in production
+  maxStoresPerUser: 2
+  maxStoresTotal: 6
+  provisionTimeoutSec: 600                 # a store that is not Ready by then is marked Failed with a reason
+  resources:
+    requests: { cpu: 20m, memory: 48Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  # Leaner defaults for tenant stores than for the primary store (merged over the store.* values above).
+  store:
+    persistence: { size: 2Gi }
+    resources:
+      requests: { cpu: 50m, memory: 192Mi }
+      limits: { cpu: "1", memory: 768Mi }
+  mariadb:
+    persistence: { size: 2Gi }
+    resources:
+      requests: { cpu: 50m, memory: 192Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  hosted:                                   # admins can deploy an MCP server from a container image
+    maxServers: 5
+    allowedRegistries: [woo-platform/, ghcr.io/, docker.io/, quay.io/, registry.k8s.io/]

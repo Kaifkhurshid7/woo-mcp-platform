@@ -56,3 +56,15 @@ llm:
 networkPolicy:
   enabled: true
   ingressControllerNamespace: kube-system
+
+# Multi-store provisioning: each store gets <slug>.<storeDomainSuffix>, so add a wildcard DNS record
+# (*.stores.example.com -> VPS IP). With TLS, cert-manager issues one certificate per store host over HTTP-01.
+provisioner:
+  image: { repository: woo-platform/provisioner, tag: "1.0.0" }
+  storeDomainSuffix: stores.example.com
+  maxStoresPerUser: 3
+  maxStoresTotal: 10
+
+# Optional: shared Postgres so the gateway can run several replicas.
+postgres:
+  enabled: false

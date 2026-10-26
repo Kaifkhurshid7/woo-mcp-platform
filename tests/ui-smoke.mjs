@@ -1,4 +1,4 @@
-// Renders the BUILT dashboard (images/dashboard/dist) in jsdom against a running gateway and clicks through
+// Renders the BUILT dashboard (services/dashboard/dist) in jsdom against a running gateway and clicks through
 // the main screens. Not a replacement for a real browser, but it catches runtime errors in the React code.
 //   GATEWAY_URL=http://127.0.0.1:9500 ADMIN_EMAIL=... ADMIN_PASSWORD=... node tests/ui-smoke.mjs
 import assert from 'node:assert/strict';
@@ -8,13 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 
 const base = process.env.GATEWAY_URL.replace(/\/$/, '');
-const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../images/dashboard/dist');
+const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../services/dashboard/dist');
 const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
 const js = fs.readFileSync(path.join(dist, html.match(/src="\/(assets\/[^"]+\.js)"/)[1]), 'utf8');
 
 let cookie = '';
 const errors = [];
-const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: `${base}/`, runScripts: 'outside-only', pretendToBeVisual: true });
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+  url: `${base}/`,
+  runScripts: 'outside-only',
+  pretendToBeVisual: true,
+});
 const { window } = dom;
 window.fetch = async (url, opts = {}) => {
   const res = await fetch(new URL(url, base), { ...opts, headers: { ...(opts.headers || {}), ...(cookie ? { cookie } : {}) } });
@@ -47,7 +51,10 @@ function setValue(el, v) {
   el.dispatchEvent(new window.Event('change', { bubbles: true }));
 }
 const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-const nav = (route) => { window.location.hash = route; window.dispatchEvent(new window.HashChangeEvent('hashchange')); };
+const nav = (route) => {
+  window.location.hash = route;
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+};
 
 window.eval(js);
 
@@ -66,7 +73,7 @@ await until(() => /woo__create_product/.test(text()), 'tool list expands');
 console.log('ok  tool list shows prefixed names');
 
 nav('/keys');
-await until(() => /Gateway endpoint/.test(text()), 'keys page');
+await until(() => /Gateway endpoint/.test(text()) && /Sign in with your browser/.test(text()), 'keys page');
 setValue($('input[placeholder^="e.g."]'), 'ui-smoke');
 $('form.inline').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
 await until(() => /Your new API key/.test(text()), 'new key modal');
@@ -84,6 +91,14 @@ console.log('ok  chat answered and displayed the tool trace');
 nav('/audit');
 await until(() => /list_orders/.test(text()) && /chat/.test(text()), 'audit entries');
 console.log('ok  audit log lists the call');
+
+nav('/stores');
+await until(() => /New store/.test(text()), 'stores page');
+console.log('ok  stores page rendered');
+
+nav('/metrics');
+await until(() => /Error rate/.test(text()), 'metrics page');
+console.log('ok  metrics page rendered');
 
 nav('/team');
 await until(() => /Invite a team member/.test(text()), 'team page');

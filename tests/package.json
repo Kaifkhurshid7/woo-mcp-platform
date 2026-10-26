@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "e2e": "node e2e.mjs"
+    "e2e": "node e2e.mjs",
+    "demo": "node cluster-demo.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1"
