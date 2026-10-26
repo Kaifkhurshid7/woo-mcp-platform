@@ -1,0 +1,16 @@
+{
+  "name": "mcp-gateway",
+  "version": "1.0.0",
+  "description": "Team MCP gateway: registry of upstream MCP servers, one MCP endpoint, API keys, audit log, chat agent",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=22.13" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "express": "^4.21.2"
+  }
+}

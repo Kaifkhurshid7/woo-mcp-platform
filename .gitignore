@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+/tests/chartcheck/chartcheck
+/tests/chartcheck/chartcheck.exe
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local databases (gateway SQLite)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Environment and secrets: never commit these
+.env
+.env.*
+!.env.example
+values-secret*.yaml
+*.secret.yaml
+*.pem
+*.key
+*.crt
+kubeconfig
+*.kubeconfig
+
+# Helm
+charts/**/charts/*.tgz
+charts/**/Chart.lock
+*.tgz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code local settings
+.claude/

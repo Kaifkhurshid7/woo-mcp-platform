@@ -1,0 +1,7 @@
+apiVersion: v2
+name: platform
+description: WooCommerce store + team MCP gateway (WooCommerce MCP server, dashboard, chat agent) on Kubernetes
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords: [woocommerce, mcp, gateway]

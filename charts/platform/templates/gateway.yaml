@@ -1,0 +1,103 @@
+{{- $c := dict "root" . "c" "gateway" }}
+{{- $name := include "platform.cname" $c }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "platform.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  strategy:
+    type: Recreate          # SQLite on a ReadWriteOnce volume: never two writers during a rollout
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/gateway-configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "platform.pullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: gateway
+          image: {{ include "platform.image" (dict "root" . "img" .Values.gateway.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- include "platform.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}
+          env:
+            - name: ENCRYPTION_KEY
+              {{- include "platform.secretRef" (dict "root" . "key" "gateway-encryption-key") | nindent 14 }}
+            - name: ADMIN_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "gateway-admin-password") | nindent 14 }}
+            - name: WOO_MCP_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-mcp-token") | nindent 14 }}
+            - name: NOTES_MCP_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "notes-mcp-token") | nindent 14 }}
+            - name: UTILS_MCP_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "utils-mcp-token") | nindent 14 }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "platform.secretName" . }}
+                  key: llm-api-key
+                  optional: true
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}

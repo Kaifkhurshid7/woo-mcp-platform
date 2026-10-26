@@ -1,0 +1,32 @@
+{{- $c := dict "root" . "c" "gateway" }}
+{{- $woo := include "platform.cname" (dict "root" . "c" "woo-mcp") }}
+{{- $seed := list (dict "slug" "woo" "name" "WooCommerce store" "url" (printf "http://%s:3000/mcp" $woo) "credentialEnv" "WOO_MCP_TOKEN") }}
+{{- if .Values.demoServers.notes.enabled }}
+{{- $seed = append $seed (dict "slug" "notes" "name" "Team notes" "url" (printf "http://%s:3000/mcp" (include "platform.cname" (dict "root" . "c" "notes-mcp"))) "credentialEnv" "NOTES_MCP_TOKEN") }}
+{{- end }}
+{{- if .Values.demoServers.utils.enabled }}
+{{- $seed = append $seed (dict "slug" "utils" "name" "Utilities (calculator, clock)" "url" (printf "http://%s:3000/mcp" (include "platform.cname" (dict "root" . "c" "utils-mcp"))) "credentialEnv" "UTILS_MCP_TOKEN") }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform.cname" $c }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+data:
+  PORT: "8080"
+  DB_PATH: /data/gateway.db
+  ADMIN_EMAIL: {{ .Values.secrets.adminEmail | quote }}
+  PUBLIC_URL: {{ include "platform.dashboardUrl" . | quote }}
+  COOKIE_SECURE: {{ eq .Values.domain.scheme "https" | quote }}
+  TRUST_PROXY: "true"
+  CALL_TIMEOUT_MS: {{ .Values.gateway.config.callTimeoutMs | quote }}
+  LIST_TIMEOUT_MS: {{ .Values.gateway.config.listTimeoutMs | quote }}
+  REFRESH_INTERVAL_MS: {{ .Values.gateway.config.refreshIntervalMs | quote }}
+  RATE_LIMIT_PER_MIN: {{ .Values.gateway.config.rateLimitPerMin | quote }}
+  ALLOW_PRIVATE_UPSTREAMS: {{ .Values.gateway.config.allowPrivateUpstreams | quote }}
+  LLM_PROVIDER: {{ .Values.llm.provider | quote }}
+  LLM_MODEL: {{ .Values.llm.model | quote }}
+  LLM_BASE_URL: {{ .Values.llm.baseUrl | quote }}
+  CHAT_MAX_STEPS: {{ .Values.llm.maxSteps | quote }}
+  SEED_SERVERS: {{ toJson $seed | quote }}

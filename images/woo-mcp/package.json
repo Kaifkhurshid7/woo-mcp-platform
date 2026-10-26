@@ -1,0 +1,17 @@
+{
+  "name": "woo-mcp",
+  "version": "1.0.0",
+  "description": "MCP server (Streamable HTTP) exposing a WooCommerce store's products and orders as tools",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "express": "^4.21.2",
+    "zod": "^3.25.76"
+  }
+}

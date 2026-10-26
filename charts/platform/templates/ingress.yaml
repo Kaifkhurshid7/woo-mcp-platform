@@ -1,0 +1,82 @@
+{{- $store := include "platform.cname" (dict "root" . "c" "wordpress") }}
+{{- $gw := include "platform.cname" (dict "root" . "c" "gateway") }}
+{{- $dash := include "platform.cname" (dict "root" . "c" "dashboard") }}
+{{- $tls := .Values.ingress.tls }}
+{{- /* Only the storefront and the dashboard/gateway are published. woo-mcp and the other upstreams have no Ingress. */}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "platform.fullname" . }}-store
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "ingress") | nindent 4 }}
+  {{- if or .Values.ingress.annotations $tls.clusterIssuer }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if and $tls.enabled $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.domain.store | quote }}]
+      secretName: {{ $tls.storeSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.domain.store | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $store }}
+                port: { number: 80 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "platform.fullname" . }}-dashboard
+  labels:
+    {{- include "platform.labels" (dict "root" . "c" "ingress") | nindent 4 }}
+  {{- if or .Values.ingress.annotations $tls.clusterIssuer }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if and $tls.enabled $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.domain.dashboard | quote }}]
+      secretName: {{ $tls.dashboardSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.domain.dashboard | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gw }}
+                port: { number: 8080 }
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gw }}
+                port: { number: 8080 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $dash }}
+                port: { number: 8080 }

@@ -1,0 +1,116 @@
+{{- $c := dict "root" . "c" "wordpress" }}
+{{- $name := include "platform.cname" $c }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "platform.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.store.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # the content volume is ReadWriteOnce
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+    spec:
+      {{- include "platform.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: wordpress
+          image: {{ include "platform.image" (dict "root" . "img" .Values.store.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: {{ include "platform.cname" (dict "root" . "c" "mariadb") }}:3306
+            - name: WORDPRESS_DB_NAME
+              value: wordpress
+            - name: WORDPRESS_DB_USER
+              value: wordpress
+            - name: WORDPRESS_DB_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "mariadb-password") | nindent 14 }}
+            - name: WP_SITE_URL
+              value: {{ include "platform.storeUrl" . | quote }}
+            - name: WP_SITE_TITLE
+              value: {{ .Values.store.title | quote }}
+            - name: WP_ADMIN_USER
+              value: {{ .Values.store.adminUser | quote }}
+            - name: WP_ADMIN_EMAIL
+              value: {{ .Values.store.adminEmail | quote }}
+            - name: WP_ADMIN_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "wp-admin-password") | nindent 14 }}
+            - name: WC_CURRENCY
+              value: {{ .Values.store.currency | quote }}
+            - name: WC_COUNTRY
+              value: {{ .Values.store.country | quote }}
+            - name: WOO_CONSUMER_KEY
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-consumer-key") | nindent 14 }}
+            - name: WOO_CONSUMER_SECRET
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-consumer-secret") | nindent 14 }}
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                define('WP_HOME', getenv('WP_SITE_URL'));
+                define('WP_SITEURL', getenv('WP_SITE_URL'));
+                if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { $_SERVER['HTTPS'] = 'on'; }
+                define('WP_MEMORY_LIMIT', '256M');
+                define('DISALLOW_FILE_EDIT', true);
+                define('WP_AUTO_UPDATE_CORE', false);
+          startupProbe:                 # first start copies WordPress into the volume and installs the store
+            httpGet: { path: /wp-login.php, port: http }
+            periodSeconds: 5
+            failureThreshold: 90
+          readinessProbe:               # ready only once the bootstrap script finished (shop pages, COD, API key)
+            exec:
+              command: ["test", "-f", "/tmp/bootstrap-done"]
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.store.resources | nindent 12 }}
+          volumeMounts:
+            - name: content
+              mountPath: /var/www/html
+      volumes:
+        - name: content
+          persistentVolumeClaim:
+            claimName: {{ $name }}

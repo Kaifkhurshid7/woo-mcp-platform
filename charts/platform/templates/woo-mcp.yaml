@@ -1,0 +1,73 @@
+{{- $c := dict "root" . "c" "woo-mcp" }}
+{{- $name := include "platform.cname" $c }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP          # cluster-internal only: no Ingress, and a NetworkPolicy admits only the gateway
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  replicas: {{ .Values.wooMcp.replicas }}
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+    spec:
+      {{- include "platform.pullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: woo-mcp
+          image: {{ include "platform.image" (dict "root" . "img" .Values.wooMcp.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- include "platform.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: MCP_AUTH_TOKEN
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-mcp-token") | nindent 14 }}
+            - name: WOO_BASE_URL
+              value: http://{{ include "platform.cname" (dict "root" . "c" "wordpress") }}
+            - name: WOO_HOST_HEADER
+              value: {{ printf "%s%s" .Values.domain.store .Values.domain.port | quote }}
+            - name: WOO_CONSUMER_KEY
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-consumer-key") | nindent 14 }}
+            - name: WOO_CONSUMER_SECRET
+              {{- include "platform.secretRef" (dict "root" . "key" "woo-consumer-secret") | nindent 14 }}
+            - name: STORE_TIMEZONE
+              value: {{ .Values.store.timezone | quote }}
+            - name: STORE_NAME
+              value: {{ .Values.store.title | quote }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.wooMcp.resources | nindent 12 }}

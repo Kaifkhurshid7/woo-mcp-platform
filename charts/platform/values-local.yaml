@@ -1,0 +1,18 @@
+# Local k3d cluster, ingress published on host port 8080.
+# *.localtest.me resolves to 127.0.0.1 in public DNS, so no /etc/hosts editing is needed.
+domain:
+  store: store.localtest.me
+  dashboard: dash.localtest.me
+  scheme: http
+  port: ":8080"
+
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent   # images are imported into the cluster with `k3d image import`
+
+ingress:
+  className: traefik
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-5-5

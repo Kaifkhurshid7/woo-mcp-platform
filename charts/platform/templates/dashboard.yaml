@@ -1,0 +1,62 @@
+{{- $c := dict "root" . "c" "dashboard" }}
+{{- $name := include "platform.cname" $c }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicas }}
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+    spec:
+      {{- include "platform.pullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: dashboard
+          image: {{ include "platform.image" (dict "root" . "img" .Values.dashboard.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- include "platform.containerSecurity" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

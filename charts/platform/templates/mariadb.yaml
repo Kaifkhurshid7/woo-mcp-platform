@@ -1,0 +1,84 @@
+{{- $c := dict "root" . "c" "mariadb" }}
+{{- $name := include "platform.cname" $c }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selector" $c | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $c | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "platform.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $c | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mariadb
+          image: {{ printf "%s:%s" .Values.mariadb.image.repository (toString .Values.mariadb.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "mariadb-root-password") | nindent 14 }}
+            - name: MARIADB_DATABASE
+              value: wordpress
+            - name: MARIADB_USER
+              value: wordpress
+            - name: MARIADB_PASSWORD
+              {{- include "platform.secretRef" (dict "root" . "key" "mariadb-password") | nindent 14 }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect", "--innodb_initialized"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh", "--connect"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "platform.selector" $c | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "platform.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.persistence.size }}

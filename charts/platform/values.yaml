@@ -1,0 +1,105 @@
+# Defaults describe a LOCAL k3d/kind setup. Production differences live in values-prod.yaml.
+# Nothing secret belongs in this file: see the `secrets` section.
+
+global:
+  imageRegistry: ""            # prefix for the images this repo builds, e.g. ghcr.io/acme ("" = local images)
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []         # e.g. [{name: regcred}]
+  storageClass: ""             # "" = cluster default (k3s/k3d: local-path, kind: standard)
+
+domain:
+  store: store.localtest.me        # storefront host
+  dashboard: dash.localtest.me     # dashboard + gateway (/api, /mcp) host
+  scheme: http                     # https in production
+  port: ""                         # ":8080" when the ingress is published on a non-standard host port
+
+ingress:
+  className: traefik               # k3s/k3d ship Traefik; use "nginx" on kind + ingress-nginx
+  annotations: {}
+  tls:
+    enabled: false
+    clusterIssuer: ""              # cert-manager ClusterIssuer name; adds the cert-manager annotation
+    storeSecretName: store-tls
+    dashboardSecretName: dashboard-tls
+
+secrets:
+  # Option A (default): the chart creates one Secret. Any value left empty is generated randomly on
+  # first install and then kept on upgrades. Read them back with `make creds`.
+  # Option B (production): create the Secret yourself and set existingSecret (see scripts/create-secret.sh).
+  existingSecret: ""
+  adminEmail: admin@example.com    # dashboard bootstrap admin login (not a secret)
+  adminPassword: ""
+  encryptionKey: ""                # encrypts upstream credentials at rest in the gateway DB
+  mariadbRootPassword: ""
+  mariadbPassword: ""
+  wpAdminPassword: ""
+  llmApiKey: ""                    # pass with --set secrets.llmApiKey=... (never commit)
+
+store:
+  image: { repository: woo-platform/wordpress, tag: dev }
+  title: Demo Store
+  adminUser: shopadmin
+  adminEmail: shop@example.com
+  currency: USD
+  country: "US:CA"
+  timezone: UTC                    # also used by woo-mcp to resolve "today"
+  persistence: { size: 5Gi }
+  resources:
+    requests: { cpu: 150m, memory: 384Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+mariadb:
+  image: { repository: mariadb, tag: "11.4" }
+  persistence: { size: 5Gi }
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 768Mi }
+
+wooMcp:
+  image: { repository: woo-platform/woo-mcp, tag: dev }
+  replicas: 1
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 192Mi }
+
+# Two extra upstream MCP servers (one image, two personalities) so the gateway aggregates >= 3 servers.
+demoServers:
+  image: { repository: woo-platform/demo-mcp, tag: dev }
+  notes: { enabled: true }
+  utils: { enabled: true }
+  resources:
+    requests: { cpu: 10m, memory: 48Mi }
+    limits: { cpu: 100m, memory: 128Mi }
+
+gateway:
+  image: { repository: woo-platform/gateway, tag: dev }
+  replicas: 1                      # SQLite on a ReadWriteOnce volume: keep at 1 (see docs/ARCHITECTURE.md)
+  persistence: { size: 1Gi }
+  config:
+    callTimeoutMs: 30000
+    listTimeoutMs: 5000
+    refreshIntervalMs: 10000
+    rateLimitPerMin: 120
+    allowPrivateUpstreams: true    # cluster-internal upstreams live on private IPs; metadata/loopback are always blocked
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+
+dashboard:
+  image: { repository: woo-platform/dashboard, tag: dev }
+  replicas: 1
+  resources:
+    requests: { cpu: 10m, memory: 24Mi }
+    limits: { cpu: 100m, memory: 96Mi }
+
+# Chat agent model. provider: anthropic | openai (any OpenAI-compatible API: Groq, OpenRouter, Gemini,
+# Ollama...) | mock (tests only) | none. The API key goes in secrets.llmApiKey / the Secret.
+llm:
+  provider: anthropic
+  model: claude-sonnet-5-5
+  baseUrl: ""
+  maxSteps: 8
+
+networkPolicy:
+  enabled: true                    # needs a CNI that enforces policies (k3s/k3d do; kind's default does not)
+  ingressControllerNamespace: kube-system   # where Traefik runs on k3s; "ingress-nginx" for ingress-nginx

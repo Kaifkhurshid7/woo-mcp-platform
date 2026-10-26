@@ -1,0 +1,58 @@
+# Production-like VPS running k3s. Same chart, configuration only.
+# Replace example.com with your domain and point both DNS A records at the VPS public IP.
+domain:
+  store: shop.example.com
+  dashboard: mcp.example.com
+  scheme: https
+  port: ""
+
+global:
+  imageRegistry: ghcr.io/YOUR_ORG        # images pushed with scripts/push-images.sh
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []                   # e.g. [{name: ghcr-pull}] for private registries
+  storageClass: local-path               # k3s default
+
+ingress:
+  className: traefik
+  tls:
+    enabled: true
+    clusterIssuer: letsencrypt-prod      # cert-manager (see docs/DEPLOY-VPS.md)
+
+secrets:
+  existingSecret: woo-platform-secrets   # created out-of-band by scripts/create-secret.sh, never stored in git
+  adminEmail: you@example.com
+
+store:
+  image: { repository: woo-platform/wordpress, tag: "1.0.0" }
+  title: My Store
+  currency: INR
+  country: "IN:BR"
+  timezone: Asia/Kolkata
+  persistence: { size: 20Gi }
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1536Mi }
+
+mariadb:
+  persistence: { size: 20Gi }
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+wooMcp:
+  image: { repository: woo-platform/woo-mcp, tag: "1.0.0" }
+demoServers:
+  image: { repository: woo-platform/demo-mcp, tag: "1.0.0" }
+gateway:
+  image: { repository: woo-platform/gateway, tag: "1.0.0" }
+  persistence: { size: 2Gi }
+dashboard:
+  image: { repository: woo-platform/dashboard, tag: "1.0.0" }
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-5-5
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: kube-system

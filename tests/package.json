@@ -1,0 +1,14 @@
+{
+  "name": "platform-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "node e2e.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

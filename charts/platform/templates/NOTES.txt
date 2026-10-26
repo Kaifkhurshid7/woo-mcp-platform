@@ -1,0 +1,17 @@
+WooCommerce + team MCP gateway installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+  Storefront        {{ include "platform.storeUrl" . }}
+  WooCommerce admin {{ include "platform.storeUrl" . }}/wp-admin   (user: {{ .Values.store.adminUser }})
+  Dashboard         {{ include "platform.dashboardUrl" . }}        (admin: {{ .Values.secrets.adminEmail }})
+  MCP endpoint      {{ include "platform.dashboardUrl" . }}/mcp    (Authorization: Bearer <your key>)
+
+The first start takes a few minutes: WordPress installs itself and the store becomes Ready last.
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "platform.cname" (dict "root" . "c" "wordpress") }} --timeout=10m
+
+Read generated passwords (they live in the Secret "{{ include "platform.secretName" . }}"):
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.secretName" . }} -o jsonpath='{.data.gateway-admin-password}' | base64 -d; echo
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.secretName" . }} -o jsonpath='{.data.wp-admin-password}' | base64 -d; echo
+{{- if eq .Values.llm.provider "none" }}
+
+Chat agent: no LLM configured. Set llm.provider / llm.model and secrets.llmApiKey, then `helm upgrade`.
+{{- end }}
