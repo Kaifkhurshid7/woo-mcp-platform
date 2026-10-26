@@ -7,8 +7,6 @@ dist/
 build/
 coverage/
 *.tsbuildinfo
-/tests/chartcheck/chartcheck
-/tests/chartcheck/chartcheck.exe
 
 # Logs
 *.log

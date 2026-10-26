@@ -1,0 +1,20 @@
+{
+  "name": "woo-mcp-platform",
+  "private": true,
+  "type": "module",
+  "description": "Repo-level tooling only (lint + format). Each service has its own package.json.",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"services/*/src/**/*.{js,jsx,css}\" \"services/*/test/**/*.js\" \"tests/*.mjs\" \"*.md\" \"docs/*.md\"",
+    "format:check": "prettier --check \"services/*/src/**/*.{js,jsx,css}\" \"services/*/test/**/*.js\" \"tests/*.mjs\" \"*.md\" \"docs/*.md\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2"
+  }
+}

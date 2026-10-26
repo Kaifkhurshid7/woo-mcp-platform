@@ -31,10 +31,10 @@ destroy: ## Delete the whole local cluster and all data
 
 # ---- verification without a cluster -----------------------------------------------------
 install-deps: ## npm install for every Node package
-	for d in images/woo-mcp images/demo-mcp images/gateway images/dashboard tests; do (cd $$d && npm install --silent); done
+	for d in services/woo-mcp services/demo-mcp services/gateway services/dashboard tests; do (cd $$d && npm install --silent); done
 
 test: ## Unit tests (Node) for woo-mcp, demo-mcp and the gateway
-	for d in images/woo-mcp images/demo-mcp images/gateway; do (cd $$d && npm test --silent) || exit 1; done
+	for d in services/woo-mcp services/demo-mcp services/gateway; do (cd $$d && npm test --silent) || exit 1; done
 
 e2e: ## End-to-end test of the platform logic with real processes and a fake store
 	cd tests && node e2e.mjs
